@@ -1,117 +1,37 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for RLMixin generic tokenizer_manager passthrough.
-
-These tests mock out heavy dependencies (sglang, dynamo._core) so they run in
-a lightweight venv with only pytest + pytest-asyncio.
-"""
+"""Unit tests for RLMixin generic tokenizer_manager passthrough."""
 
 import dataclasses
-import importlib.machinery
-import importlib.util
 import sys
-from pathlib import Path
-from types import ModuleType
+import types
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from dynamo.sglang.request_handlers.handler_base import BaseWorkerHandler, RLMixin
 
 pytestmark = [
     pytest.mark.unit,
     pytest.mark.sglang,
     pytest.mark.gpu_0,
     pytest.mark.pre_merge,
-    pytest.mark.parallel,
 ]
 
 
 # ---------------------------------------------------------------------------
-# Stub out native / heavy imports, then load handler_base directly from file.
-#
-# In CI GPU runners the package is installed so we can import directly.
-# For local dev without a full install, fall back to loading from the file.
+# Fixtures
 # ---------------------------------------------------------------------------
 
 
-class _StubModule(ModuleType):
-    """Module stub that returns MagicMock for any unknown attribute."""
-
-    def __getattr__(self, attr):
-        if attr.startswith("__") and attr.endswith("__"):
-            raise AttributeError(attr)
-        return MagicMock()
-
-
-def _ensure_mock_module(name):
-    if name not in sys.modules:
-        mod = _StubModule(name)
-        mod.__path__ = []
-        mod.__package__ = name
-        # Set __spec__ so importlib.util.find_spec() doesn't raise ValueError
-        mod.__spec__ = importlib.machinery.ModuleSpec(name, None)
-        sys.modules[name] = mod
-
-
-def _load_handler_base():
-    """Import BaseWorkerHandler and RLMixin.
-
-    Prefer a normal import (works when the package is installed, e.g. CI GPU
-    runners).  Fall back to loading handler_base.py directly from the repo
-    tree (lightweight local dev without a full install).
-    """
-    try:
-        from dynamo.sglang.request_handlers.handler_base import (
-            BaseWorkerHandler,
-            RLMixin,
-        )
-
-        return BaseWorkerHandler, RLMixin
-    except (ImportError, ModuleNotFoundError):
-        pass
-
-    # -- Lightweight fallback: stub heavy deps, load from file. --
-    _ensure_mock_module("dynamo._core")
-    _ensure_mock_module("dynamo.common")
-    _ensure_mock_module("dynamo.common.utils")
-    _ensure_mock_module("dynamo.common.utils.input_params")
-    _ensure_mock_module("dynamo.llm")
-    _ensure_mock_module("dynamo.llm.exceptions")
-    _ensure_mock_module("dynamo.runtime")
-    _ensure_mock_module("dynamo.sglang._compat")
-    _ensure_mock_module("dynamo.sglang.args")
-    _ensure_mock_module("dynamo.sglang.publisher")
-    _ensure_mock_module("yaml")
-
-    for _mod in [
-        "sglang",
-        "sglang.srt",
-        "sglang.srt.utils",
-        "sglang.srt.managers",
-        "sglang.srt.managers.io_struct",
-    ]:
-        _ensure_mock_module(_mod)
-
-    _REPO = Path(__file__).resolve().parent.parent
-    _handler_base_path = (
-        _REPO
-        / "components"
-        / "src"
-        / "dynamo"
-        / "sglang"
-        / "request_handlers"
-        / "handler_base.py"
-    )
-    _spec = importlib.util.spec_from_file_location(
-        "dynamo.sglang.request_handlers.handler_base", _handler_base_path
-    )
-    _handler_base = importlib.util.module_from_spec(_spec)
-    sys.modules[_spec.name] = _handler_base
-    _spec.loader.exec_module(_handler_base)
-    return _handler_base.BaseWorkerHandler, _handler_base.RLMixin
-
-
-BaseWorkerHandler, RLMixin = _load_handler_base()
+@pytest.fixture(autouse=True)
+def _stub_sglang_io_struct(monkeypatch):
+    """Keep unit tests independent from CUDA-only sglang imports."""
+    io_struct = types.ModuleType("sglang.srt.managers.io_struct")
+    monkeypatch.setitem(sys.modules, "sglang.srt.managers.io_struct", io_struct)
+    yield io_struct
 
 
 # ---------------------------------------------------------------------------
@@ -119,24 +39,18 @@ BaseWorkerHandler, RLMixin = _load_handler_base()
 # ---------------------------------------------------------------------------
 
 
-def _make_handler():
-    """Create a concrete BaseWorkerHandler with mocked engine/config."""
+class _TestWorkerHandler(BaseWorkerHandler):
+    async def generate(self, request, context):
+        yield {}
 
-    class _ConcreteHandler(BaseWorkerHandler):
-        async def generate(self, request, context):
-            yield {}
 
-    engine = MagicMock()
-    engine.tokenizer_manager = MagicMock()
-    engine.tokenizer_manager.tokenizer = MagicMock()
-    engine.async_generate = MagicMock()
-
-    config = MagicMock()
-    config.serving_mode = "prefill_decode"
-    config.server_args.skip_tokenizer_init = True
-    config.server_args.enable_trace = False
-
-    handler = _ConcreteHandler(engine=engine, config=config)
+def _make_handler() -> _TestWorkerHandler:
+    handler = _TestWorkerHandler.__new__(_TestWorkerHandler)
+    handler.engine = SimpleNamespace(
+        tokenizer_manager=SimpleNamespace(
+            auto_create_handle_loop=MagicMock(),
+        )
+    )
     return handler
 
 
