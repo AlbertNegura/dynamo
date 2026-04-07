@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unit tests for BaseWorkerHandler generic tokenizer_manager passthrough.
+"""Unit tests for RLMixin generic tokenizer_manager passthrough.
 
 These tests mock out heavy dependencies (sglang, dynamo._core) so they run in
 a lightweight venv with only pytest + pytest-asyncio.
@@ -19,13 +19,18 @@ import pytest
 
 pytestmark = [
     pytest.mark.unit,
+    pytest.mark.sglang,
+    pytest.mark.gpu_0,
     pytest.mark.pre_merge,
     pytest.mark.parallel,
 ]
 
 
 # ---------------------------------------------------------------------------
-# Stub out native / heavy imports, then load handler_base directly from file
+# Stub out native / heavy imports, then load handler_base directly from file.
+#
+# In CI GPU runners the package is installed so we can import directly.
+# For local dev without a full install, fall back to loading from the file.
 # ---------------------------------------------------------------------------
 
 
@@ -48,47 +53,65 @@ def _ensure_mock_module(name):
         sys.modules[name] = mod
 
 
-_ensure_mock_module("dynamo._core")
-_ensure_mock_module("dynamo.common")
-_ensure_mock_module("dynamo.common.utils")
-_ensure_mock_module("dynamo.common.utils.input_params")
-_ensure_mock_module("dynamo.llm")
-_ensure_mock_module("dynamo.llm.exceptions")
-_ensure_mock_module("dynamo.runtime")
-_ensure_mock_module("dynamo.sglang._compat")
-_ensure_mock_module("dynamo.sglang.args")
-_ensure_mock_module("dynamo.sglang.publisher")
-_ensure_mock_module("yaml")
+def _load_handler_base():
+    """Import BaseWorkerHandler and RLMixin.
 
-for _mod in [
-    "sglang",
-    "sglang.srt",
-    "sglang.srt.utils",
-    "sglang.srt.managers",
-    "sglang.srt.managers.io_struct",
-]:
-    _ensure_mock_module(_mod)
+    Prefer a normal import (works when the package is installed, e.g. CI GPU
+    runners).  Fall back to loading handler_base.py directly from the repo
+    tree (lightweight local dev without a full install).
+    """
+    try:
+        from dynamo.sglang.request_handlers.handler_base import (
+            BaseWorkerHandler,
+            RLMixin,
+        )
 
-# Load handler_base.py directly — bypasses request_handlers/__init__.py
-# which re-exports every handler and triggers a huge import chain.
-_REPO = Path(__file__).resolve().parent.parent
-_handler_base_path = (
-    _REPO
-    / "components"
-    / "src"
-    / "dynamo"
-    / "sglang"
-    / "request_handlers"
-    / "handler_base.py"
-)
-_spec = importlib.util.spec_from_file_location(
-    "dynamo.sglang.request_handlers.handler_base", _handler_base_path
-)
-_handler_base = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = _handler_base
-_spec.loader.exec_module(_handler_base)
-BaseWorkerHandler = _handler_base.BaseWorkerHandler
-RLMixin = _handler_base.RLMixin
+        return BaseWorkerHandler, RLMixin
+    except (ImportError, ModuleNotFoundError):
+        pass
+
+    # -- Lightweight fallback: stub heavy deps, load from file. --
+    _ensure_mock_module("dynamo._core")
+    _ensure_mock_module("dynamo.common")
+    _ensure_mock_module("dynamo.common.utils")
+    _ensure_mock_module("dynamo.common.utils.input_params")
+    _ensure_mock_module("dynamo.llm")
+    _ensure_mock_module("dynamo.llm.exceptions")
+    _ensure_mock_module("dynamo.runtime")
+    _ensure_mock_module("dynamo.sglang._compat")
+    _ensure_mock_module("dynamo.sglang.args")
+    _ensure_mock_module("dynamo.sglang.publisher")
+    _ensure_mock_module("yaml")
+
+    for _mod in [
+        "sglang",
+        "sglang.srt",
+        "sglang.srt.utils",
+        "sglang.srt.managers",
+        "sglang.srt.managers.io_struct",
+    ]:
+        _ensure_mock_module(_mod)
+
+    _REPO = Path(__file__).resolve().parent.parent
+    _handler_base_path = (
+        _REPO
+        / "components"
+        / "src"
+        / "dynamo"
+        / "sglang"
+        / "request_handlers"
+        / "handler_base.py"
+    )
+    _spec = importlib.util.spec_from_file_location(
+        "dynamo.sglang.request_handlers.handler_base", _handler_base_path
+    )
+    _handler_base = importlib.util.module_from_spec(_spec)
+    sys.modules[_spec.name] = _handler_base
+    _spec.loader.exec_module(_handler_base)
+    return _handler_base.BaseWorkerHandler, _handler_base.RLMixin
+
+
+BaseWorkerHandler, RLMixin = _load_handler_base()
 
 
 # ---------------------------------------------------------------------------
