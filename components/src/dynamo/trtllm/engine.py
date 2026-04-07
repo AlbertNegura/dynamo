@@ -169,7 +169,8 @@ class TensorRTLLMEngine:
         (triggered by MODEL_EXPRESS_SOURCE=1). By the time LLM.__init__()
         returns, all workers have completed setup_engine and published.
 
-        This method polls ModelExpress to confirm metadata is present.
+        This method polls ModelExpress via ListSources to confirm metadata is
+        present for all workers.
         """
         import time
 
@@ -179,8 +180,8 @@ class TensorRTLLMEngine:
         world_size = int(os.environ.get("WORLD_SIZE", "1"))
 
         try:
-            import grpc
-            from modelexpress import p2p_pb2, p2p_pb2_grpc
+            from modelexpress.client import MxClient
+            from modelexpress.trtllm_live_transfer import _build_trtllm_identity
         except ImportError:
             logger.warning(
                 "ModelExpress packages not available in orchestrator — "
@@ -188,27 +189,31 @@ class TensorRTLLMEngine:
             )
             return
 
-        options = [
-            ("grpc.max_receive_message_length", 200 * 1024 * 1024),
-        ]
-        channel = grpc.insecure_channel(self._model_express_url, options=options)
-        stub = p2p_pb2_grpc.P2pServiceStub(channel)
+        tp_size = int(self.engine_args.get("tensor_parallel_size", world_size))
+        ep_size = int(
+            os.environ.get("MOE_EXPERT_PARALLEL_SIZE",
+                           self.engine_args.get("moe_expert_parallel_size", "1"))
+        )
+        identity = _build_trtllm_identity(
+            model_name=model_name, tp_size=tp_size, ep_size=ep_size,
+        )
+
+        mx_client = MxClient(self._model_express_url)
+        published_ranks = 0
 
         max_wait = 300
         poll_interval = 5
         elapsed = 0
         while elapsed < max_wait:
             try:
-                response = stub.GetMetadata(
-                    p2p_pb2.GetMetadataRequest(model_name=model_name)
-                )
-                published_ranks = len(response.workers)
+                resp = mx_client.list_sources(identity=identity)
+                published_ranks = len(resp.instances)
                 if published_ranks >= world_size:
                     logger.info(
                         "ModelExpress source: all %d workers published for '%s'",
                         published_ranks, model_name,
                     )
-                    channel.close()
+                    mx_client.close()
                     return
                 logger.info(
                     "ModelExpress source: %d/%d workers published, waiting...",
@@ -222,7 +227,7 @@ class TensorRTLLMEngine:
             time.sleep(poll_interval)
             elapsed += poll_interval
 
-        channel.close()
+        mx_client.close()
         logger.warning(
             "ModelExpress source: only %d/%d workers published after %ds. "
             "Target may fail — check worker logs for publish_from_worker errors.",
