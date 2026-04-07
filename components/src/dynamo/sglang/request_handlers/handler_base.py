@@ -143,6 +143,8 @@ class RLMixin:
     ``tokenizer_manager`` attribute.
     """
 
+    engine: sgl.Engine  # provided by BaseWorkerHandler
+
     def _resolve_arg(self, arg: Any) -> Any:
         """Resolve a single argument from the generic call body.
 

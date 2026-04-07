@@ -8,6 +8,7 @@ a lightweight venv with only pytest + pytest-asyncio.
 """
 
 import dataclasses
+import importlib.machinery
 import importlib.util
 import sys
 from pathlib import Path
@@ -44,6 +45,8 @@ def _ensure_mock_module(name):
         mod = _StubModule(name)
         mod.__path__ = []
         mod.__package__ = name
+        # Set __spec__ so importlib.util.find_spec() doesn't raise ValueError
+        mod.__spec__ = importlib.machinery.ModuleSpec(name, None)
         sys.modules[name] = mod
 
 
