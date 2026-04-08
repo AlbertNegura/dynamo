@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dynamo.sglang.request_handlers.handler_base import BaseWorkerHandler, RLMixin
+from dynamo.sglang.request_handlers.handler_base import BaseWorkerHandler
 
 pytestmark = [
     pytest.mark.unit,
