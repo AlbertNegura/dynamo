@@ -3,6 +3,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
+import threading
+import time
 from typing import cast
 
 import pytest
@@ -14,8 +18,7 @@ from gpu_memory_service.client.torch.module import (
 )
 from gpu_memory_service.client.torch.tensor import _tensor_from_pointer
 from gpu_memory_service.common.locks import RequestedLockType
-
-from tests.gpu_memory_service.common.gms import GMSServer
+from gpu_memory_service.server.rpc import GMSRPCServer
 
 pytestmark = [
     pytest.mark.pre_merge,
@@ -49,9 +52,70 @@ class _TinyModule(torch.nn.Module):
 
 
 @pytest.fixture
-def running_gms():
-    with GMSServer(device=0, tag="weights") as server:
-        yield server.socket_path
+def running_gms(tmp_path):
+    socket_path = str(tmp_path / "gms.sock")
+    server = GMSRPCServer(socket_path, device=0)
+    loop: asyncio.AbstractEventLoop | None = None
+    task: asyncio.Task[None] | None = None
+    thread_error: BaseException | None = None
+
+    def run() -> None:
+        nonlocal loop, task, thread_error
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        task = loop.create_task(server.serve())
+        try:
+            loop.run_until_complete(task)
+        except asyncio.CancelledError:
+            pass
+        except BaseException as exc:
+            thread_error = exc
+        finally:
+            pending = [
+                pending_task
+                for pending_task in asyncio.all_tasks(loop)
+                if not pending_task.done()
+            ]
+            for pending_task in pending:
+                pending_task.cancel()
+            if pending:
+                loop.run_until_complete(
+                    asyncio.gather(*pending, return_exceptions=True)
+                )
+            loop.close()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+
+    deadline = time.monotonic() + 5.0
+    while True:
+        if thread_error is not None:
+            raise thread_error
+        if server._server is not None and os.path.exists(socket_path):
+            break
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"GMS socket did not appear at {socket_path}")
+        time.sleep(0.01)
+
+    try:
+        yield socket_path
+    finally:
+        if loop is not None:
+
+            def cancel() -> None:
+                if server._server is not None:
+                    server._server.close()
+                if task is not None:
+                    task.cancel()
+
+            loop.call_soon_threadsafe(cancel)
+        thread.join(timeout=5)
+        if thread.is_alive():
+            raise RuntimeError(f"GMS server thread failed to stop for {socket_path}")
+        if thread_error is not None:
+            raise thread_error
+        if os.path.exists(socket_path):
+            os.unlink(socket_path)
 
 
 def _make_gms_tensor(
