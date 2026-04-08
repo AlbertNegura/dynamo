@@ -1,6 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Torch integration coverage for GMS-backed tensors and modules.
+
+This module exercises tensor remap after unmap/remap cycles and module
+materialization from committed GMS-backed weights.
+"""
+
 from __future__ import annotations
 
 import asyncio

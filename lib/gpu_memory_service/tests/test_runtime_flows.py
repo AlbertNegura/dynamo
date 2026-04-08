@@ -1,6 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+"""GMS runtime flow coverage.
+
+This module exercises lock handoff, committed-layout publication and remap,
+reader/writer state transitions, and allocation retry behavior against one
+in-process GMS server.
+"""
+
 from __future__ import annotations
 
 import asyncio
