@@ -1,13 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Socket-level GMS helpers for the cross-component test suite.
-
-Keep this module lean: raw RPC helpers plus one in-process server wrapper.
-Package-local tests under `lib/gpu_memory_service/tests` keep their own
-white-box thread helper because they inspect private `GMSRPCServer` state that
-the cross-component scenarios intentionally do not touch.
-"""
+"""Socket-level GMS helpers for the cross-component test suite."""
 
 from __future__ import annotations
 
@@ -106,7 +100,7 @@ def list_allocations(socket_path: str) -> ListAllocationsResponse:
 
 
 class GMSServer:
-    """In-process GMS server wrapper used by the repo-level scenario tests."""
+    """In-process GMS server wrapper."""
 
     def __init__(self, device: int, tag: str = "weights"):
         from gpu_memory_service.server.rpc import GMSRPCServer

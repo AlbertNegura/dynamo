@@ -1,14 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""White-box GMS runtime flows.
-
-These tests stay package-local because they inspect private server/session
-state that the repo-level cross-component suite intentionally hides. The
-coverage here focuses on lock handoff, layout publication/remap, and
-allocation retry behavior inside a single GMS server.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -120,13 +112,7 @@ def _wait_for_ro_session_count(
 
 
 class _WhiteBoxServerThread:
-    """Threaded in-process server for package-local tests.
-
-    Keep this helper local to the `lib/gpu_memory_service/tests` suite. These
-    tests need direct access to `GMSRPCServer` internals and forced disconnects,
-    while `tests/gpu_memory_service/common/gms.py` intentionally exposes only
-    the socket-level surface used by the cross-component scenarios.
-    """
+    """Threaded in-process server helper."""
 
     def __init__(self, server, socket_path: str):
         self.server = server

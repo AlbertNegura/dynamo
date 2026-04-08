@@ -1,12 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Torch-facing GMS integration coverage.
-
-These tests stay package-local because they validate CUDA tensor remap and
-module materialization helpers directly against GMS client/server internals.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -63,9 +57,6 @@ class _TinyModule(torch.nn.Module):
 
 @pytest.fixture
 def running_gms(tmp_path):
-    # This fixture is intentionally lighter than the white-box runtime-flows
-    # fixture. These torch tests only need a live socket, not server-internal
-    # state inspection or forced disconnect hooks.
     socket_path = str(tmp_path / "gms.sock")
     server = GMSRPCServer(socket_path, device=0)
     loop: asyncio.AbstractEventLoop | None = None

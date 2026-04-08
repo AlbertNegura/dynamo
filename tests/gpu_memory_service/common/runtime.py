@@ -1,13 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared process orchestration for the cross-component GMS scenarios.
-
-`GMSServer` in `common/gms.py` is the low-level socket-speaking server wrapper.
-`GMSProcessManager` layers the frontend and backend process choreography on top
-of two such servers so the scenario tests can keep engine startup order
-explicit.
-"""
+"""Shared process orchestration for the cross-component GMS scenarios."""
 
 from __future__ import annotations
 
@@ -88,8 +82,6 @@ class GMSProcessManager:
     def __enter__(self):
         stack = ExitStack()
         try:
-            # Start the shared substrate once. Individual tests then add engines
-            # in the exact order their scenario needs.
             self.weights_gms = stack.enter_context(GMSServer(device=0, tag="weights"))
             self.kv_cache_gms = stack.enter_context(GMSServer(device=0, tag="kv_cache"))
             frontend = stack.enter_context(

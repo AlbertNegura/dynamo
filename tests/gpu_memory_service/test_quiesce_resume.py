@@ -1,13 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Cross-component GMS quiesce/resume flows.
-
-These tests live under `tests/gpu_memory_service` because they exercise the
-frontend, backend engine process, and the two GMS daemons together. Backend-
-specific route/unit coverage still belongs in `components/.../tests`.
-"""
-
 from __future__ import annotations
 
 import logging
