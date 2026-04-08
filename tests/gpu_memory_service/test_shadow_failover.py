@@ -1,6 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Cross-component GMS shadow failover flows.
+
+These tests stay in the repo-level GMS suite because they validate frontend
+routing plus multi-engine orchestration across shared weights and KV-cache GMS
+daemons, not just one backend's local control route.
+"""
+
 from __future__ import annotations
 
 import logging

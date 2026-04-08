@@ -1,6 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Torch-facing GMS integration coverage.
+
+These tests stay package-local because they validate CUDA tensor remap and
+module materialization helpers directly against GMS client/server internals.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -26,6 +32,10 @@ pytestmark = [
     pytest.mark.none,
     pytest.mark.gpu_1,
 ]
+
+_SERVER_START_TIMEOUT_SECONDS = 5.0
+_SERVER_STOP_TIMEOUT_SECONDS = 5.0
+_POLL_INTERVAL_SECONDS = 0.01
 
 
 if not torch.cuda.is_available():
@@ -53,6 +63,9 @@ class _TinyModule(torch.nn.Module):
 
 @pytest.fixture
 def running_gms(tmp_path):
+    # This fixture is intentionally lighter than the white-box runtime-flows
+    # fixture. These torch tests only need a live socket, not server-internal
+    # state inspection or forced disconnect hooks.
     socket_path = str(tmp_path / "gms.sock")
     server = GMSRPCServer(socket_path, device=0)
     loop: asyncio.AbstractEventLoop | None = None
@@ -87,7 +100,7 @@ def running_gms(tmp_path):
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
 
-    deadline = time.monotonic() + 5.0
+    deadline = time.monotonic() + _SERVER_START_TIMEOUT_SECONDS
     while True:
         if thread_error is not None:
             raise thread_error
@@ -95,7 +108,7 @@ def running_gms(tmp_path):
             break
         if time.monotonic() > deadline:
             raise TimeoutError(f"GMS socket did not appear at {socket_path}")
-        time.sleep(0.01)
+        time.sleep(_POLL_INTERVAL_SECONDS)
 
     try:
         yield socket_path
@@ -109,7 +122,7 @@ def running_gms(tmp_path):
                     task.cancel()
 
             loop.call_soon_threadsafe(cancel)
-        thread.join(timeout=5)
+        thread.join(timeout=_SERVER_STOP_TIMEOUT_SECONDS)
         if thread.is_alive():
             raise RuntimeError(f"GMS server thread failed to stop for {socket_path}")
         if thread_error is not None:

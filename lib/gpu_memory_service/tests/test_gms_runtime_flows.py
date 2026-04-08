@@ -1,6 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+"""White-box GMS runtime flows.
+
+These tests stay package-local because they inspect private server/session
+state that the repo-level cross-component suite intentionally hides. The
+coverage here focuses on lock handoff, layout publication/remap, and
+allocation retry behavior inside a single GMS server.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -39,6 +47,18 @@ pytestmark = [
 ]
 
 _SOCKET_TEST_TIMEOUT_SECONDS = 60
+_DEFAULT_WAIT_TIMEOUT_SECONDS = 2.0
+_SERVER_START_TIMEOUT_SECONDS = 5.0
+_SERVER_STOP_TIMEOUT_SECONDS = 5.0
+_RW_DISCONNECT_TIMEOUT_SECONDS = 5.0
+_BLOCKED_WRITER_JOIN_TIMEOUT_SECONDS = 2.0
+_ALLOCATION_RETRY_INTERVAL_SECONDS = 0.1
+_ALLOCATION_RETRY_TIMEOUT_SECONDS = 120.0
+_EXPORT_HOLDER_READY_TIMEOUT_SECONDS = 30.0
+_ALLOCATION_BLOCK_ASSERTION_SECONDS = 5.0
+_GPU_MEMORY_RECOVERY_TIMEOUT_SECONDS = 30.0
+_FAST_POLL_INTERVAL_SECONDS = 0.01
+_SLOW_POLL_INTERVAL_SECONDS = 0.1
 
 
 def _gpu_memory_free_bytes(device: int = 0) -> int:
@@ -66,40 +86,48 @@ def _drop_connection(session: _GMSClientSession) -> None:
 def _wait_for_server_state(
     server: GMSRPCServer,
     expected: ServerState,
-    timeout: float = 2.0,
+    timeout: float = _DEFAULT_WAIT_TIMEOUT_SECONDS,
 ) -> None:
     deadline = time.monotonic() + timeout
     while server.state != expected:
         if time.monotonic() > deadline:
             raise TimeoutError(f"server did not reach {expected.name}")
-        time.sleep(0.01)
+        time.sleep(_FAST_POLL_INTERVAL_SECONDS)
 
 
 def _wait_for_waiting_writers(
     server: GMSRPCServer,
     expected: int,
-    timeout: float = 2.0,
+    timeout: float = _DEFAULT_WAIT_TIMEOUT_SECONDS,
 ) -> None:
     deadline = time.monotonic() + timeout
     while server._gms._sessions.snapshot().waiting_writers != expected:
         if time.monotonic() > deadline:
             raise TimeoutError(f"waiting writers did not reach {expected}")
-        time.sleep(0.01)
+        time.sleep(_FAST_POLL_INTERVAL_SECONDS)
 
 
 def _wait_for_ro_session_count(
     server: GMSRPCServer,
     expected: int,
-    timeout: float = 2.0,
+    timeout: float = _DEFAULT_WAIT_TIMEOUT_SECONDS,
 ) -> None:
     deadline = time.monotonic() + timeout
     while server._gms._sessions.snapshot().ro_session_count != expected:
         if time.monotonic() > deadline:
             raise TimeoutError(f"RO session count did not reach {expected}")
-        time.sleep(0.01)
+        time.sleep(_FAST_POLL_INTERVAL_SECONDS)
 
 
-class ServerThread:
+class _WhiteBoxServerThread:
+    """Threaded in-process server for package-local tests.
+
+    Keep this helper local to the `lib/gpu_memory_service/tests` suite. These
+    tests need direct access to `GMSRPCServer` internals and forced disconnects,
+    while `tests/gpu_memory_service/common/gms.py` intentionally exposes only
+    the socket-level surface used by the cross-component scenarios.
+    """
+
     def __init__(self, server, socket_path: str):
         self.server = server
         self.socket_path = socket_path
@@ -131,7 +159,7 @@ class ServerThread:
 
     def start(self) -> None:
         self._thread.start()
-        deadline = time.monotonic() + 5.0
+        deadline = time.monotonic() + _SERVER_START_TIMEOUT_SECONDS
         last_probe_error: Exception | None = None
         while True:
             if self._exception is not None:
@@ -149,7 +177,7 @@ class ServerThread:
                 if last_probe_error is not None:
                     raise timeout_error from last_probe_error
                 raise timeout_error
-            time.sleep(0.01)
+            time.sleep(_FAST_POLL_INTERVAL_SECONDS)
 
     def stop(self) -> None:
         if self._loop is not None:
@@ -161,7 +189,7 @@ class ServerThread:
                     self._task.cancel()
 
             self._loop.call_soon_threadsafe(cancel)
-        self._thread.join(timeout=5)
+        self._thread.join(timeout=_SERVER_STOP_TIMEOUT_SECONDS)
         if self._thread.is_alive():
             raise RuntimeError(
                 f"GMS server thread failed to stop for {self.socket_path}"
@@ -171,7 +199,10 @@ class ServerThread:
         if os.path.exists(self.socket_path):
             os.unlink(self.socket_path)
 
-    def disconnect_rw_session(self, timeout: float = 5.0) -> None:
+    def disconnect_rw_session(
+        self,
+        timeout: float = _RW_DISCONNECT_TIMEOUT_SECONDS,
+    ) -> None:
         if self._loop is None:
             raise RuntimeError("GMS server thread is not running")
         future = asyncio.run_coroutine_threadsafe(
@@ -193,7 +224,7 @@ class ServerThread:
 def running_gms(tmp_path):
     socket_path = str(tmp_path / "gms.sock")
     server = GMSRPCServer(socket_path, device=0, allocation_retry_interval=0.01)
-    thread = ServerThread(server, socket_path)
+    thread = _WhiteBoxServerThread(server, socket_path)
     thread.start()
     try:
         yield server, socket_path
@@ -373,7 +404,7 @@ def test_reader_mapping_disconnect_then_next_writer_clears_old_layout(
 
         reader.unmap_all_vas()
         reader.abort()
-        thread.join(timeout=2)
+        thread.join(timeout=_BLOCKED_WRITER_JOIN_TIMEOUT_SECONDS)
 
         next_writer = next_writer_result.get("session")
         assert isinstance(next_writer, _GMSClientSession)
@@ -671,6 +702,8 @@ def test_same_process_republish_remaps_against_new_committed_hash(
 async def test_large_allocation_unblocks_after_export_fd_holder_dies(
     tmp_path,
 ):
+    """Allocation retries should unblock after the last exported FD holder dies."""
+
     _HOLD_EXPORT_FD_PROGRAM = (
         "import sys\n"
         "import time\n"
@@ -689,8 +722,8 @@ async def test_large_allocation_unblocks_after_export_fd_holder_dies(
 
     allocations = GMSAllocationManager(
         device=0,
-        allocation_retry_interval=0.1,
-        allocation_retry_timeout=120.0,
+        allocation_retry_interval=_ALLOCATION_RETRY_INTERVAL_SECONDS,
+        allocation_retry_timeout=_ALLOCATION_RETRY_TIMEOUT_SECONDS,
     )
     holder = None
     allocation_task = None
@@ -709,6 +742,9 @@ async def test_large_allocation_unblocks_after_export_fd_holder_dies(
         exported_fd = allocations.export_allocation(first.allocation_id)
         holder_ready = tmp_path / "holder.ready"
         holder_log = tmp_path / "holder.log"
+        # Hold the exported FD in another process so `clear_all()` drops the
+        # server's bookkeeping first, then the allocator retry path waits for
+        # the last external reference to die before reusing GPU memory.
         with holder_log.open("w", encoding="utf-8") as log_file:
             holder = subprocess.Popen(
                 [
@@ -725,11 +761,11 @@ async def test_large_allocation_unblocks_after_export_fd_holder_dies(
             )
         os.close(exported_fd)
 
-        deadline = time.monotonic() + 30.0
+        deadline = time.monotonic() + _EXPORT_HOLDER_READY_TIMEOUT_SECONDS
         while not holder_ready.exists():
             assert holder.poll() is None, holder_log.read_text(encoding="utf-8")
             assert time.monotonic() < deadline, holder_log.read_text(encoding="utf-8")
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(_SLOW_POLL_INTERVAL_SECONDS)
 
         allocations.clear_all()
         assert allocations.allocation_count == 0
@@ -742,28 +778,31 @@ async def test_large_allocation_unblocks_after_export_fd_holder_dies(
             )
         )
 
-        deadline = time.monotonic() + 5.0
+        deadline = time.monotonic() + _ALLOCATION_BLOCK_ASSERTION_SECONDS
         while time.monotonic() < deadline:
             assert holder.poll() is None, holder_log.read_text(encoding="utf-8")
             assert not allocation_task.done()
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(_SLOW_POLL_INTERVAL_SECONDS)
 
         assert not allocation_task.done()
 
         os.killpg(os.getpgid(holder.pid), signal.SIGKILL)
-        holder.wait(timeout=30.0)
+        holder.wait(timeout=_EXPORT_HOLDER_READY_TIMEOUT_SECONDS)
 
-        second = await asyncio.wait_for(allocation_task, timeout=120.0)
+        second = await asyncio.wait_for(
+            allocation_task,
+            timeout=_ALLOCATION_RETRY_TIMEOUT_SECONDS,
+        )
         assert second.layout_slot == 0
         assert allocations.allocation_count == 1
 
         allocations.clear_all()
         assert allocations.allocation_count == 0
 
-        deadline = time.monotonic() + 30.0
+        deadline = time.monotonic() + _GPU_MEMORY_RECOVERY_TIMEOUT_SECONDS
         while _gpu_memory_free_bytes() < free_before - (1 << 30):
             assert time.monotonic() < deadline
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(_SLOW_POLL_INTERVAL_SECONDS)
     finally:
         if allocation_task is not None and not allocation_task.done():
             allocation_task.cancel()
@@ -775,4 +814,4 @@ async def test_large_allocation_unblocks_after_export_fd_holder_dies(
             allocations.clear_all()
         if holder is not None and holder.poll() is None:
             os.killpg(os.getpgid(holder.pid), signal.SIGKILL)
-            holder.wait(timeout=30.0)
+            holder.wait(timeout=_EXPORT_HOLDER_READY_TIMEOUT_SECONDS)

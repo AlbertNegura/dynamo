@@ -1,6 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Shared process orchestration for the cross-component GMS scenarios.
+
+`GMSServer` in `common/gms.py` is the low-level socket-speaking server wrapper.
+`GMSProcessManager` layers the frontend and backend process choreography on top
+of two such servers so the scenario tests can keep engine startup order
+explicit.
+"""
+
 from __future__ import annotations
 
 import json
@@ -24,23 +32,28 @@ from tests.utils.port_utils import allocate_ports, deallocate_ports
 logger = logging.getLogger(__name__)
 
 
-def _normalize_weights_lock_mode(weights_lock_mode: RequestedLockType | None):
+def _normalize_weights_lock_mode(
+    weights_lock_mode: RequestedLockType | None,
+) -> RequestedLockType | None:
+    """Normalize string/enum inputs and collapse the default RW_OR_RO mode."""
+
     if weights_lock_mode is None:
         return None
 
     try:
-        if isinstance(weights_lock_mode, RequestedLockType):
-            weights_lock_mode = weights_lock_mode.value
-        weights_lock_mode = RequestedLockType(str(weights_lock_mode).lower())
+        normalized = weights_lock_mode
+        if isinstance(normalized, RequestedLockType):
+            normalized = normalized.value
+        normalized = RequestedLockType(str(normalized).lower())
     except ValueError as exc:
         raise ValueError(
             "Engine weights_lock_mode must be RW, RO, RW_OR_RO, or None. "
             "Use RW_OR_RO or None for the default RW_OR_RO behavior."
         ) from exc
 
-    if weights_lock_mode == RequestedLockType.RW_OR_RO:
+    if normalized == RequestedLockType.RW_OR_RO:
         return None
-    return weights_lock_mode
+    return normalized
 
 
 def get_gpu_memory_used(device: int = 0) -> int:
@@ -53,6 +66,8 @@ def get_gpu_memory_used(device: int = 0) -> int:
 
 
 class GMSProcessManager:
+    """Start the shared GMS daemons and frontend for one test scenario."""
+
     def __init__(
         self,
         request,
@@ -73,6 +88,8 @@ class GMSProcessManager:
     def __enter__(self):
         stack = ExitStack()
         try:
+            # Start the shared substrate once. Individual tests then add engines
+            # in the exact order their scenario needs.
             self.weights_gms = stack.enter_context(GMSServer(device=0, tag="weights"))
             self.kv_cache_gms = stack.enter_context(GMSServer(device=0, tag="kv_cache"))
             frontend = stack.enter_context(
@@ -147,6 +164,8 @@ class GMSProcessManager:
 
 
 class GMSEngineProcess(EngineProcess, ABC):
+    """Backend process wrapper with a common quiesce/resume surface."""
+
     quiesce_route: str
     resume_route: str
 

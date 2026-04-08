@@ -125,6 +125,9 @@ STUB_MODULES = [
     "sklearn.linear_model",
 ]
 
+# Keep gpu_memory_service off the stub list. Marker collection prepends the
+# repo's `lib/` path below so the suite can import the local source tree, and
+# the repo-level GMS suites use package-level `pytest.importorskip(...)` guards.
 # Project paths for local imports
 PROJECT_PATHS = [
     os.getcwd(),

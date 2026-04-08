@@ -1,6 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Socket-level GMS helpers for the cross-component test suite.
+
+Keep this module lean: raw RPC helpers plus one in-process server wrapper.
+Package-local tests under `lib/gpu_memory_service/tests` keep their own
+white-box thread helper because they inspect private `GMSRPCServer` state that
+the cross-component scenarios intentionally do not touch.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -20,6 +28,10 @@ if TYPE_CHECKING:
         ListAllocationsResponse,
     )
 
+_SERVER_START_TIMEOUT_SECONDS = 30.0
+_SERVER_STOP_TIMEOUT_SECONDS = 5.0
+_POLL_INTERVAL_SECONDS = 0.1
+
 
 def _request_gms(
     socket_path: str,
@@ -29,6 +41,8 @@ def _request_gms(
     lock_type: RequestedLockType | None = None,
     timeout_ms: int | None = None,
 ):
+    """Send one raw request over a Unix socket, with optional lock handshake."""
+
     from gpu_memory_service.common.protocol.messages import (
         ErrorResponse,
         HandshakeRequest,
@@ -92,6 +106,8 @@ def list_allocations(socket_path: str) -> ListAllocationsResponse:
 
 
 class GMSServer:
+    """In-process GMS server wrapper used by the repo-level scenario tests."""
+
     def __init__(self, device: int, tag: str = "weights"):
         from gpu_memory_service.server.rpc import GMSRPCServer
 
@@ -133,7 +149,7 @@ class GMSServer:
             else:
                 raise RuntimeError(f"GMS already active at {self.socket_path}")
         self._thread.start()
-        deadline = time.monotonic() + 30.0
+        deadline = time.monotonic() + _SERVER_START_TIMEOUT_SECONDS
         last_probe_error: OSError | None = None
         while True:
             if self._exception is not None:
@@ -151,7 +167,7 @@ class GMSServer:
                 if last_probe_error is not None:
                     raise timeout_error from last_probe_error
                 raise timeout_error
-            time.sleep(0.1)
+            time.sleep(_POLL_INTERVAL_SECONDS)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self._loop is not None:
@@ -163,7 +179,7 @@ class GMSServer:
                     self._task.cancel()
 
             self._loop.call_soon_threadsafe(cancel)
-        self._thread.join(timeout=5)
+        self._thread.join(timeout=_SERVER_STOP_TIMEOUT_SECONDS)
         if self._thread.is_alive():
             raise RuntimeError(
                 f"GMS server thread failed to stop for {self.socket_path}"
