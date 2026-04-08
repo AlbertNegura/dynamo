@@ -26,10 +26,10 @@ from tests.utils.port_utils import allocate_ports, deallocate_ports
 logger = logging.getLogger(__name__)
 
 
-def _normalize_weights_lock_mode(
-    weights_lock_mode: RequestedLockType | None,
+def _canonicalize_weights_lock_mode(
+    weights_lock_mode: RequestedLockType | str | None,
 ) -> RequestedLockType | None:
-    """Normalize string/enum inputs and collapse the default RW_OR_RO mode."""
+    """Validate the override and collapse the default RW_OR_RO mode."""
 
     if weights_lock_mode is None:
         return None
@@ -71,7 +71,7 @@ class GMSProcessManager:
     ):
         self._request = request
         self._engine_cls = engine_cls
-        self._weights_lock_mode = _normalize_weights_lock_mode(weights_lock_mode)
+        self._weights_lock_mode = _canonicalize_weights_lock_mode(weights_lock_mode)
         self._stack: ExitStack | None = None
         self.frontend_port: int | None = None
         self.weights_gms = None
@@ -127,7 +127,7 @@ class GMSProcessManager:
         if weights_lock_mode is None:
             weights_lock_mode = self._weights_lock_mode
         else:
-            weights_lock_mode = _normalize_weights_lock_mode(weights_lock_mode)
+            weights_lock_mode = _canonicalize_weights_lock_mode(weights_lock_mode)
 
         engine = self._engine_cls(
             self._request,
@@ -174,7 +174,7 @@ class GMSEngineProcess(EngineProcess, ABC):
         self.engine_id = engine_id
         self.system_port = system_port
         self._reserved_ports = reserved_ports
-        self.weights_lock_mode = _normalize_weights_lock_mode(weights_lock_mode)
+        self.weights_lock_mode = _canonicalize_weights_lock_mode(weights_lock_mode)
 
         super().__init__(
             command=self.command(),
