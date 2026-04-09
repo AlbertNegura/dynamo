@@ -394,6 +394,20 @@ pub struct MockEngineArgs {
     #[builder(default = "None")]
     pub router_queue_policy: Option<RouterQueuePolicy>,
 
+    // ── KVBM G1↔G2 offload ────────────────────────────────────────────
+    /// Number of G2 (host-memory) blocks. Set > 0 to enable KVBM offload.
+    #[builder(default = "0")]
+    pub num_g2_blocks: usize,
+
+    /// Max blocks per offload batch in the G1→G2 pipeline.
+    #[builder(default = "32")]
+    pub kvbm_offload_batch_size: usize,
+
+    /// Simulated G1↔G2 bandwidth in GB/s (PCIe Gen4 x16).
+    #[builder(default = "14.0")]
+    pub kvbm_bandwidth_g1_g2: f64,
+
+    // ── SGLang ──────────────────────────────────────────────────────────
     /// SGLang-specific configuration. Only used when `engine_type == Sglang`.
     #[builder(default = "None")]
     pub sglang: Option<SglangArgs>,
